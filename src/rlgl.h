@@ -1289,6 +1289,292 @@ RLAPI void rlSetBlendMode(int mode) {}
 RLAPI void rlSetBlendFactors(int glSrcFactor, int glDstFactor, int glEquation) {}
 RLAPI void rlSetBlendFactorsSeparate(int glSrcRGB, int glDstRGB, int glSrcAlpha, int glDstAlpha, int glEqRGB, int glEqAlpha) {}
 
+//----------------------------------------------------------------------------------
+// Module Functions Definition - Vertex Buffer Functions
+//----------------------------------------------------------------------------------
+
+RLAPI unsigned int rlLoadVertexArray(void)
+{
+    // Sokol doesn't use VAOs - return a dummy ID
+    // The binding will be handled through sg_bindings
+    static unsigned int vaoCounter = 1;
+    return vaoCounter++;
+}
+
+RLAPI unsigned int rlLoadVertexBuffer(const void *buffer, int size, bool dynamic)
+{
+    sg_buffer_desc desc = {
+        .size = (size_t)size,
+        .usage = {
+            .vertex_buffer = true,
+            .stream_update = dynamic,
+            .immutable = !dynamic
+        },
+        .data = { .ptr = buffer, .size = (size_t)size }
+    };
+    sg_buffer buf = sg_make_buffer(&desc);
+    return buf.id;
+}
+
+RLAPI unsigned int rlLoadVertexBufferElement(const void *buffer, int size, bool dynamic)
+{
+    sg_buffer_desc desc = {
+        .size = (size_t)size,
+        .usage = {
+            .index_buffer = true,
+            .stream_update = dynamic,
+            .immutable = !dynamic
+        },
+        .data = { .ptr = buffer, .size = (size_t)size }
+    };
+    sg_buffer buf = sg_make_buffer(&desc);
+    return buf.id;
+}
+
+RLAPI void rlUpdateVertexBuffer(unsigned int bufferId, const void *data, int dataSize, int offset)
+{
+    sg_buffer buf = { bufferId };
+    sg_range range = { .ptr = data, .size = (size_t)dataSize };
+    sg_update_buffer(buf, &range);
+}
+
+RLAPI void rlUpdateVertexBufferElements(unsigned int id, const void *data, int dataSize, int offset)
+{
+    sg_buffer buf = { id };
+    sg_range range = { .ptr = data, .size = (size_t)dataSize };
+    sg_update_buffer(buf, &range);
+}
+
+RLAPI void rlUnloadVertexArray(unsigned int vaoId)
+{
+    // No-op for Sokol - VAOs not used
+}
+
+RLAPI void rlUnloadVertexBuffer(unsigned int vboId)
+{
+    sg_buffer buf = { vboId };
+    sg_destroy_buffer(buf);
+}
+
+//----------------------------------------------------------------------------------
+// Module Functions Definition - Texture Functions
+//----------------------------------------------------------------------------------
+
+RLAPI unsigned int rlLoadTexture(const void *data, int width, int height, int format, int mipmapCount)
+{
+    // Map rlgl format to Sokol format
+    sg_pixel_format pixelFormat = SG_PIXELFORMAT_RGBA8;
+    
+    // Basic format mapping (simplified for now)
+    switch (format) {
+        case RL_PIXELFORMAT_UNCOMPRESSED_GRAYSCALE: pixelFormat = SG_PIXELFORMAT_R8; break;
+        case RL_PIXELFORMAT_UNCOMPRESSED_GRAY_ALPHA: pixelFormat = SG_PIXELFORMAT_RG8; break;
+        case RL_PIXELFORMAT_UNCOMPRESSED_R8G8B8: pixelFormat = SG_PIXELFORMAT_RGBA8; break; // Note: no RGB8, using RGBA8
+        case RL_PIXELFORMAT_UNCOMPRESSED_R8G8B8A8: pixelFormat = SG_PIXELFORMAT_RGBA8; break;
+        default: pixelFormat = SG_PIXELFORMAT_RGBA8; break;
+    }
+    
+    sg_image_desc desc = {
+        .type = SG_IMAGETYPE_2D,
+        .width = width,
+        .height = height,
+        .pixel_format = pixelFormat,
+        .data.mip_levels[0] = { .ptr = data, .size = (size_t)(width * height * 4) } // Simplified
+    };
+    
+    sg_image img = sg_make_image(&desc);
+    return img.id;
+}
+
+RLAPI unsigned int rlLoadTextureDepth(int width, int height, bool useRenderBuffer)
+{
+    sg_image_desc desc = {
+        .type = SG_IMAGETYPE_2D,
+        .usage = { .depth_stencil_attachment = true },
+        .width = width,
+        .height = height,
+        .pixel_format = SG_PIXELFORMAT_DEPTH
+    };
+    
+    sg_image img = sg_make_image(&desc);
+    return img.id;
+}
+
+RLAPI unsigned int rlLoadTextureCubemap(const void *data, int size, int format, int mipmapCount)
+{
+    // TODO: Implement cubemap loading
+    return 0;
+}
+
+RLAPI void rlUpdateTexture(unsigned int id, int offsetX, int offsetY, int width, int height, int format, const void *data)
+{
+    sg_image img = { id };
+    sg_image_data imgData = {
+        .mip_levels[0] = { .ptr = data, .size = (size_t)(width * height * 4) }
+    };
+    sg_update_image(img, &imgData);
+}
+
+RLAPI void rlUnloadTexture(unsigned int id)
+{
+    sg_image img = { id };
+    sg_destroy_image(img);
+}
+
+//----------------------------------------------------------------------------------
+// Module Functions Definition - Shader Functions
+//----------------------------------------------------------------------------------
+
+RLAPI unsigned int rlLoadShaderCode(const char *vsCode, const char *fsCode)
+{
+    // Create a Sokol shader from GLSL code
+    sg_shader_desc desc = {
+        .vertex_func = { .source = vsCode },
+        .fragment_func = { .source = fsCode }
+    };
+    
+    sg_shader shd = sg_make_shader(&desc);
+    return shd.id;
+}
+
+RLAPI unsigned int rlCompileShader(const char *shaderCode, int type)
+{
+    // Sokol compiles shaders as part of sg_make_shader
+    // Return a dummy ID for compatibility
+    static unsigned int shaderCounter = 1;
+    return shaderCounter++;
+}
+
+RLAPI unsigned int rlLoadShaderProgram(unsigned int vShaderId, unsigned int fShaderId)
+{
+    // In Sokol, shaders are created together
+    // Return dummy ID for compatibility
+    static unsigned int programCounter = 1;
+    return programCounter++;
+}
+
+RLAPI void rlUnloadShaderProgram(unsigned int id)
+{
+    sg_shader shd = { id };
+    sg_destroy_shader(shd);
+}
+
+RLAPI int rlGetLocationUniform(unsigned int shaderId, const char *uniformName)
+{
+    // Sokol uses indices, not names at runtime
+    // Return a dummy index
+    return 0;
+}
+
+RLAPI int rlGetLocationAttrib(unsigned int shaderId, const char *attribName)
+{
+    // Sokol uses indices, not names at runtime
+    // Return a dummy index based on standard locations
+    if (strcmp(attribName, RL_DEFAULT_SHADER_ATTRIB_NAME_POSITION) == 0) return 0;
+    if (strcmp(attribName, RL_DEFAULT_SHADER_ATTRIB_NAME_TEXCOORD) == 0) return 1;
+    if (strcmp(attribName, RL_DEFAULT_SHADER_ATTRIB_NAME_NORMAL) == 0) return 2;
+    if (strcmp(attribName, RL_DEFAULT_SHADER_ATTRIB_NAME_COLOR) == 0) return 3;
+    return -1;
+}
+
+RLAPI void rlSetUniform(int locIndex, const void *value, int uniformType, int count)
+{
+    // TODO: Implement uniform setting via Sokol
+    // Will need to track uniforms and apply them before draw calls
+}
+
+//----------------------------------------------------------------------------------
+// Module Functions Definition - Framebuffer Functions  
+//----------------------------------------------------------------------------------
+
+RLAPI unsigned int rlLoadFramebuffer(void)
+{
+    // Sokol doesn't use explicit FBO objects
+    // Framebuffers are defined through sg_pass with attachments
+    static unsigned int fboCounter = 1;
+    return fboCounter++;
+}
+
+RLAPI void rlFramebufferAttach(unsigned int fboId, unsigned int texId, int attachType, int texType, int mipLevel)
+{
+    // TODO: Track framebuffer attachments for later pass creation
+}
+
+RLAPI bool rlFramebufferComplete(unsigned int id)
+{
+    return true; // Assume complete for now
+}
+
+RLAPI void rlUnloadFramebuffer(unsigned int id)
+{
+    // TODO: Clean up associated pass resources
+}
+
+//----------------------------------------------------------------------------------
+// Module Functions Definition - Render Batch Functions
+//----------------------------------------------------------------------------------
+
+RLAPI rlRenderBatch rlLoadRenderBatch(int numBuffers, int bufferElements)
+{
+    rlRenderBatch batch = { 0 };
+    
+    batch.bufferCount = numBuffers;
+    batch.vertexBuffer = (rlVertexBuffer *)RL_CALLOC(numBuffers, sizeof(rlVertexBuffer));
+    
+    for (int i = 0; i < numBuffers; i++) {
+        batch.vertexBuffer[i].elementCount = bufferElements;
+        
+        // Allocate CPU-side buffers
+        batch.vertexBuffer[i].vertices = (float *)RL_MALLOC(bufferElements * 3 * 4 * sizeof(float));
+        batch.vertexBuffer[i].texcoords = (float *)RL_MALLOC(bufferElements * 2 * 4 * sizeof(float));
+        batch.vertexBuffer[i].normals = (float *)RL_MALLOC(bufferElements * 3 * 4 * sizeof(float));
+        batch.vertexBuffer[i].colors = (unsigned char *)RL_MALLOC(bufferElements * 4 * 4 * sizeof(unsigned char));
+        batch.vertexBuffer[i].indices = (unsigned int *)RL_MALLOC(bufferElements * 6 * sizeof(unsigned int));
+    }
+    
+    batch.draws = (rlDrawCall *)RL_MALLOC(RL_DEFAULT_BATCH_DRAWCALLS * sizeof(rlDrawCall));
+    batch.drawCounter = 1;
+    
+    return batch;
+}
+
+RLAPI void rlUnloadRenderBatch(rlRenderBatch batch)
+{
+    if (batch.vertexBuffer != NULL) {
+        for (int i = 0; i < batch.bufferCount; i++) {
+            RL_FREE(batch.vertexBuffer[i].vertices);
+            RL_FREE(batch.vertexBuffer[i].texcoords);
+            RL_FREE(batch.vertexBuffer[i].normals);
+            RL_FREE(batch.vertexBuffer[i].colors);
+            RL_FREE(batch.vertexBuffer[i].indices);
+        }
+        RL_FREE(batch.vertexBuffer);
+    }
+    
+    if (batch.draws != NULL) RL_FREE(batch.draws);
+}
+
+RLAPI void rlDrawRenderBatch(rlRenderBatch *batch)
+{
+    // TODO: Submit batch to Sokol for rendering
+    // This is a critical function that needs full implementation
+}
+
+RLAPI void rlDrawRenderBatchActive(void)
+{
+    FlushBatch();
+}
+
+RLAPI bool rlCheckRenderBatchLimit(int vCount)
+{
+    return false; // Simplified - assume no limit for now
+}
+
+RLAPI void rlSetTexture(unsigned int id)
+{
+    RLGL.currentTextureId = id;
+}
+
 // TODO: Implement remaining 100+ functions properly
 
 //----------------------------------------------------------------------------------
