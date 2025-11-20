@@ -334,6 +334,40 @@
     #define RL_DEFAULT_SHADER_ATTRIB_NAME_INSTANCE_TX  "instanceTransform"
 #endif
 
+// Default shader uniform names
+#ifndef RL_DEFAULT_SHADER_UNIFORM_NAME_MVP
+    #define RL_DEFAULT_SHADER_UNIFORM_NAME_MVP         "mvp"
+#endif
+#ifndef RL_DEFAULT_SHADER_UNIFORM_NAME_VIEW
+    #define RL_DEFAULT_SHADER_UNIFORM_NAME_VIEW        "matView"
+#endif
+#ifndef RL_DEFAULT_SHADER_UNIFORM_NAME_PROJECTION
+    #define RL_DEFAULT_SHADER_UNIFORM_NAME_PROJECTION  "matProjection"
+#endif
+#ifndef RL_DEFAULT_SHADER_UNIFORM_NAME_MODEL
+    #define RL_DEFAULT_SHADER_UNIFORM_NAME_MODEL       "matModel"
+#endif
+#ifndef RL_DEFAULT_SHADER_UNIFORM_NAME_NORMAL
+    #define RL_DEFAULT_SHADER_UNIFORM_NAME_NORMAL      "matNormal"
+#endif
+#ifndef RL_DEFAULT_SHADER_UNIFORM_NAME_COLOR
+    #define RL_DEFAULT_SHADER_UNIFORM_NAME_COLOR       "colDiffuse"
+#endif
+#ifndef RL_DEFAULT_SHADER_UNIFORM_NAME_BONE_MATRICES
+    #define RL_DEFAULT_SHADER_UNIFORM_NAME_BONE_MATRICES  "boneMatrices"
+#endif
+
+// Default shader sampler2D names
+#ifndef RL_DEFAULT_SHADER_SAMPLER2D_NAME_TEXTURE0
+    #define RL_DEFAULT_SHADER_SAMPLER2D_NAME_TEXTURE0  "texture0"
+#endif
+#ifndef RL_DEFAULT_SHADER_SAMPLER2D_NAME_TEXTURE1
+    #define RL_DEFAULT_SHADER_SAMPLER2D_NAME_TEXTURE1  "texture1"
+#endif
+#ifndef RL_DEFAULT_SHADER_SAMPLER2D_NAME_TEXTURE2
+    #define RL_DEFAULT_SHADER_SAMPLER2D_NAME_TEXTURE2  "texture2"
+#endif
+
 //----------------------------------------------------------------------------------
 // Types and Structures Definition
 //----------------------------------------------------------------------------------
@@ -823,6 +857,11 @@ RLAPI void rlLoadDrawQuad(void);     // Load and draw a quad
 #include "external/sokol/sokol_log.h"
 #include "external/sokol/sokol_gfx.h"
 
+// Include raymath for matrix operations
+#ifndef RAYMATH_H
+    #include "raymath.h"
+#endif
+
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -910,18 +949,12 @@ static RLGLState RLGL = { 0 };
 // Module specific Functions Declaration (Internal)
 //----------------------------------------------------------------------------------
 
-// Matrix operations (manual implementation needed)
-static Matrix MatrixIdentity(void);
-static Matrix MatrixMultiply(Matrix left, Matrix right);
-static Matrix MatrixTranslate(float x, float y, float z);
-static Matrix MatrixRotate(float angle, float x, float y, float z);
-static Matrix MatrixScale(float x, float y, float z);
-static Matrix MatrixFrustum(double left, double right, double bottom, double top, double near, double far);
-static Matrix MatrixOrtho(double left, double right, double bottom, double top, double near, double far);
-
 // Batch management
 static void FlushBatch(void);
 static void ConvertQuadsToTriangles(void);
+
+// Helper function for MatrixRotate compatibility with raymath
+static Matrix rlMatrixRotateAxisAngle(float angle, float x, float y, float z);
 
 //----------------------------------------------------------------------------------
 // Module Functions Definition - Initialization and management
@@ -1073,7 +1106,7 @@ RLAPI void rlTranslatef(float x, float y, float z)
 
 RLAPI void rlRotatef(float angle, float x, float y, float z)
 {
-    Matrix rotation = MatrixRotate(angle*DEG2RAD, x, y, z);
+    Matrix rotation = rlMatrixRotateAxisAngle(angle*DEG2RAD, x, y, z);
     *RLGL.currentMatrix = MatrixMultiply(*RLGL.currentMatrix, rotation);
 }
 
@@ -1262,124 +1295,11 @@ RLAPI void rlSetBlendFactorsSeparate(int glSrcRGB, int glDstRGB, int glSrcAlpha,
 // Helper Functions Implementation
 //----------------------------------------------------------------------------------
 
-static Matrix MatrixIdentity(void)
+// Helper function to convert angle+xyz rotation to raymath's Vector3+angle format
+static Matrix rlMatrixRotateAxisAngle(float angle, float x, float y, float z)
 {
-    Matrix result = {
-        1.0f, 0.0f, 0.0f, 0.0f,
-        0.0f, 1.0f, 0.0f, 0.0f,
-        0.0f, 0.0f, 1.0f, 0.0f,
-        0.0f, 0.0f, 0.0f, 1.0f
-    };
-    return result;
-}
-
-static Matrix MatrixMultiply(Matrix left, Matrix right)
-{
-    Matrix result = { 0 };
-    
-    result.m0 = left.m0*right.m0 + left.m1*right.m4 + left.m2*right.m8 + left.m3*right.m12;
-    result.m1 = left.m0*right.m1 + left.m1*right.m5 + left.m2*right.m9 + left.m3*right.m13;
-    result.m2 = left.m0*right.m2 + left.m1*right.m6 + left.m2*right.m10 + left.m3*right.m14;
-    result.m3 = left.m0*right.m3 + left.m1*right.m7 + left.m2*right.m11 + left.m3*right.m15;
-    result.m4 = left.m4*right.m0 + left.m5*right.m4 + left.m6*right.m8 + left.m7*right.m12;
-    result.m5 = left.m4*right.m1 + left.m5*right.m5 + left.m6*right.m9 + left.m7*right.m13;
-    result.m6 = left.m4*right.m2 + left.m5*right.m6 + left.m6*right.m10 + left.m7*right.m14;
-    result.m7 = left.m4*right.m3 + left.m5*right.m7 + left.m6*right.m11 + left.m7*right.m15;
-    result.m8 = left.m8*right.m0 + left.m9*right.m4 + left.m10*right.m8 + left.m11*right.m12;
-    result.m9 = left.m8*right.m1 + left.m9*right.m5 + left.m10*right.m9 + left.m11*right.m13;
-    result.m10 = left.m8*right.m2 + left.m9*right.m6 + left.m10*right.m10 + left.m11*right.m14;
-    result.m11 = left.m8*right.m3 + left.m9*right.m7 + left.m10*right.m11 + left.m11*right.m15;
-    result.m12 = left.m12*right.m0 + left.m13*right.m4 + left.m14*right.m8 + left.m15*right.m12;
-    result.m13 = left.m12*right.m1 + left.m13*right.m5 + left.m14*right.m9 + left.m15*right.m13;
-    result.m14 = left.m12*right.m2 + left.m13*right.m6 + left.m14*right.m10 + left.m15*right.m14;
-    result.m15 = left.m12*right.m3 + left.m13*right.m7 + left.m14*right.m11 + left.m15*right.m15;
-    
-    return result;
-}
-
-static Matrix MatrixTranslate(float x, float y, float z)
-{
-    Matrix result = MatrixIdentity();
-    result.m12 = x;
-    result.m13 = y;
-    result.m14 = z;
-    return result;
-}
-
-static Matrix MatrixRotate(float angle, float x, float y, float z)
-{
-    Matrix result = MatrixIdentity();
-    
-    float c = cosf(angle);
-    float s = sinf(angle);
-    float t = 1.0f - c;
-    
-    // Normalize axis
-    float length = sqrtf(x*x + y*y + z*z);
-    if (length != 0.0f) {
-        x /= length;
-        y /= length;
-        z /= length;
-    }
-    
-    result.m0 = t*x*x + c;
-    result.m1 = t*x*y + s*z;
-    result.m2 = t*x*z - s*y;
-    result.m4 = t*x*y - s*z;
-    result.m5 = t*y*y + c;
-    result.m6 = t*y*z + s*x;
-    result.m8 = t*x*z + s*y;
-    result.m9 = t*y*z - s*x;
-    result.m10 = t*z*z + c;
-    
-    return result;
-}
-
-static Matrix MatrixScale(float x, float y, float z)
-{
-    Matrix result = MatrixIdentity();
-    result.m0 = x;
-    result.m5 = y;
-    result.m10 = z;
-    return result;
-}
-
-static Matrix MatrixFrustum(double left, double right, double bottom, double top, double near, double far)
-{
-    Matrix result = { 0 };
-    
-    float rl = (float)(right - left);
-    float tb = (float)(top - bottom);
-    float fn = (float)(far - near);
-    
-    result.m0 = ((float)near*2.0f)/rl;
-    result.m5 = ((float)near*2.0f)/tb;
-    result.m8 = ((float)right + (float)left)/rl;
-    result.m9 = ((float)top + (float)bottom)/tb;
-    result.m10 = -((float)far + (float)near)/fn;
-    result.m11 = -1.0f;
-    result.m14 = -((float)far*(float)near*2.0f)/fn;
-    
-    return result;
-}
-
-static Matrix MatrixOrtho(double left, double right, double bottom, double top, double near, double far)
-{
-    Matrix result = { 0 };
-    
-    float rl = (float)(right - left);
-    float tb = (float)(top - bottom);
-    float fn = (float)(far - near);
-    
-    result.m0 = 2.0f/rl;
-    result.m5 = 2.0f/tb;
-    result.m10 = -2.0f/fn;
-    result.m12 = -((float)left + (float)right)/rl;
-    result.m13 = -((float)top + (float)bottom)/tb;
-    result.m14 = -((float)far + (float)near)/fn;
-    result.m15 = 1.0f;
-    
-    return result;
+    Vector3 axis = { x, y, z };
+    return MatrixRotate(axis, angle);
 }
 
 static void FlushBatch(void)
