@@ -1,9 +1,9 @@
 /**********************************************************************************************
 *
-*   rlgl v5.0 - A multi-OpenGL abstraction layer with an immediate-mode style API
+*   rlgl v5.0 - A Sokol-based graphics abstraction layer with an immediate-mode style API
 *
 *   DESCRIPTION:
-*       An abstraction layer for multiple OpenGL versions (1.1, 2.1, 3.3 Core, 4.3 Core, ES 2.0, ES 3.0)
+*       An abstraction layer built on Sokol graphics (sokol_gfx.h)
 *       that provides a pseudo-OpenGL 1.1 immediate-mode style API (rlVertex, rlTranslate, rlRotate...)
 *
 *   ADDITIONAL NOTES:
@@ -21,16 +21,8 @@
 *       Internal buffer (and resources) must be manually unloaded calling rlglClose()
 *
 *   CONFIGURATION:
-*       #define GRAPHICS_API_OPENGL_11_SOFTWARE
-*       #define GRAPHICS_API_OPENGL_11
-*       #define GRAPHICS_API_OPENGL_21
-*       #define GRAPHICS_API_OPENGL_33
-*       #define GRAPHICS_API_OPENGL_43
-*       #define GRAPHICS_API_OPENGL_ES2
-*       #define GRAPHICS_API_OPENGL_ES3
-*           Use selected OpenGL graphics backend, should be supported by platform
-*           Those preprocessor defines are only used on rlgl module, if OpenGL version is
-*           required by any other module, use rlGetVersion() to check it
+*       #define GRAPHICS_API_SOKOL
+*           Use Sokol graphics backend (now the default and only supported backend)
 *
 *       #define RLGL_IMPLEMENTATION
 *           Generates the implementation of the library into the included file
@@ -83,8 +75,8 @@
 *       #define RL_DEFAULT_SHADER_SAMPLER2D_NAME_TEXTURE2  "texture2"          // texture2 (texture slot active 2)
 *
 *   DEPENDENCIES:
-*      - OpenGL libraries (depending on platform and OpenGL version selected)
-*      - GLAD OpenGL extensions loading library (only for OpenGL 3.3 Core, 4.3 Core)
+*      - Sokol graphics library (sokol_gfx.h)
+*      - No OpenGL direct dependencies (all graphics operations through Sokol)
 *
 *
 *   LICENSE: zlib/libpng
@@ -149,52 +141,9 @@
     #define RL_FREE(p)        free(p)
 #endif
 
-// Security check in case no GRAPHICS_API_OPENGL_* defined
-#if !defined(GRAPHICS_API_OPENGL_11_SOFTWARE) && \
-    !defined(GRAPHICS_API_OPENGL_11) && \
-    !defined(GRAPHICS_API_OPENGL_21) && \
-    !defined(GRAPHICS_API_OPENGL_33) && \
-    !defined(GRAPHICS_API_OPENGL_43) && \
-    !defined(GRAPHICS_API_OPENGL_ES2) && \
-    !defined(GRAPHICS_API_OPENGL_ES3)
-        #define GRAPHICS_API_OPENGL_33
-#endif
-
-// Security check in case multiple GRAPHICS_API_OPENGL_* defined
-#if defined(GRAPHICS_API_OPENGL_11) || defined(GRAPHICS_API_OPENGL_11_SOFTWARE)
-    #if defined(GRAPHICS_API_OPENGL_21)
-        #undef GRAPHICS_API_OPENGL_21
-    #endif
-    #if defined(GRAPHICS_API_OPENGL_33)
-        #undef GRAPHICS_API_OPENGL_33
-    #endif
-    #if defined(GRAPHICS_API_OPENGL_43)
-        #undef GRAPHICS_API_OPENGL_43
-    #endif
-    #if defined(GRAPHICS_API_OPENGL_ES2)
-        #undef GRAPHICS_API_OPENGL_ES2
-    #endif
-#endif
-
-// Software implementation uses OpenGL 1.1 functionality
-#if defined(GRAPHICS_API_OPENGL_11_SOFTWARE)
-    #define GRAPHICS_API_OPENGL_11
-#endif
-
-// OpenGL 2.1 uses most of OpenGL 3.3 Core functionality
-// WARNING: Specific parts are checked with #if defines
-#if defined(GRAPHICS_API_OPENGL_21)
-    #define GRAPHICS_API_OPENGL_33
-#endif
-
-// OpenGL 4.3 uses OpenGL 3.3 Core functionality
-#if defined(GRAPHICS_API_OPENGL_43)
-    #define GRAPHICS_API_OPENGL_33
-#endif
-
-// OpenGL ES 3.0 uses OpenGL ES 2.0 functionality (and more)
-#if defined(GRAPHICS_API_OPENGL_ES3)
-    #define GRAPHICS_API_OPENGL_ES2
+// Security check: Define GRAPHICS_API_SOKOL by default
+#if !defined(GRAPHICS_API_SOKOL)
+    #define GRAPHICS_API_SOKOL
 #endif
 
 // Support framebuffer objects by default
@@ -207,26 +156,16 @@
 
 // Default internal render batch elements limits
 #ifndef RL_DEFAULT_BATCH_BUFFER_ELEMENTS
-    #if defined(GRAPHICS_API_OPENGL_11) || defined(GRAPHICS_API_OPENGL_33)
-        // This is the maximum amount of elements (quads) per batch
-        // NOTE: Be careful with text, every letter maps to a quad
-        #define RL_DEFAULT_BATCH_BUFFER_ELEMENTS  8192
-    #endif
-    #if defined(GRAPHICS_API_OPENGL_ES2)
-        // We reduce memory sizes for embedded systems (RPI and HTML5)
-        // NOTE: On HTML5 (emscripten) this is allocated on heap,
-        // by default it's only 16MB!...just take care...
-        #define RL_DEFAULT_BATCH_BUFFER_ELEMENTS  2048
-    #endif
+    #define RL_DEFAULT_BATCH_BUFFER_ELEMENTS  8192
 #endif
 #ifndef RL_DEFAULT_BATCH_BUFFERS
-    #define RL_DEFAULT_BATCH_BUFFERS                 1      // Default number of batch buffers (multi-buffering)
+    #define RL_DEFAULT_BATCH_BUFFERS  1
 #endif
 #ifndef RL_DEFAULT_BATCH_DRAWCALLS
-    #define RL_DEFAULT_BATCH_DRAWCALLS             256      // Default number of batch draw calls (by state changes: mode, texture)
+    #define RL_DEFAULT_BATCH_DRAWCALLS  256
 #endif
 #ifndef RL_DEFAULT_BATCH_MAX_TEXTURE_UNITS
-    #define RL_DEFAULT_BATCH_MAX_TEXTURE_UNITS       4      // Maximum number of textures units that can be activated on batch drawing (SetShaderValueTexture())
+    #define RL_DEFAULT_BATCH_MAX_TEXTURE_UNITS  4
 #endif
 
 // Internal Matrix stack
@@ -395,14 +334,9 @@ typedef struct rlVertexBuffer {
     float *texcoords;           // Vertex texture coordinates (UV - 2 components per vertex) (shader-location = 1)
     float *normals;             // Vertex normal (XYZ - 3 components per vertex) (shader-location = 2)
     unsigned char *colors;      // Vertex colors (RGBA - 4 components per vertex) (shader-location = 3)
-#if defined(GRAPHICS_API_OPENGL_11) || defined(GRAPHICS_API_OPENGL_33)
     unsigned int *indices;      // Vertex indices (in case vertex data comes indexed) (6 indices per quad)
-#endif
-#if defined(GRAPHICS_API_OPENGL_ES2)
-    unsigned short *indices;    // Vertex indices (in case vertex data comes indexed) (6 indices per quad)
-#endif
-    unsigned int vaoId;         // OpenGL Vertex Array Object id
-    unsigned int vboId[5];      // OpenGL Vertex Buffer Objects id (5 types of vertex data)
+    unsigned int vaoId;         // Sokol buffer id (used as VAO equivalent)
+    unsigned int vboId[5];      // Sokol buffer ids (5 types of vertex data)
 } rlVertexBuffer;
 
 // Draw call type
@@ -432,15 +366,9 @@ typedef struct rlRenderBatch {
     float currentDepth;         // Current depth value for next draw
 } rlRenderBatch;
 
-// OpenGL version
+// Graphics API version
 typedef enum {
-    RL_OPENGL_11_SOFTWARE = 0,  // Software rendering
-    RL_OPENGL_11,               // OpenGL 1.1
-    RL_OPENGL_21,               // OpenGL 2.1 (GLSL 120)
-    RL_OPENGL_33,               // OpenGL 3.3 (GLSL 330)
-    RL_OPENGL_43,               // OpenGL 4.3 (using GLSL 330)
-    RL_OPENGL_ES_20,            // OpenGL ES 2.0 (GLSL 100)
-    RL_OPENGL_ES_30             // OpenGL ES 3.0 (GLSL 300 es)
+    RL_SOKOL = 0,               // Sokol graphics backend
 } rlGlVersion;
 
 // Trace log level
