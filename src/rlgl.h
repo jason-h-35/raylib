@@ -1004,11 +1004,25 @@ RLAPI void rlglInit(int width, int height)
     RLGL.currentColor[2] = 255;
     RLGL.currentColor[3] = 255;
     
-    // TODO: Allocate vertex data buffers
-    // TODO: Create default texture
-    // TODO: Create default shader
-    // TODO: Create default pipeline
-    // TODO: Initialize default batch
+    // Allocate vertex data buffers for immediate mode emulation
+    RLGL.vertexData = (float *)RL_MALLOC(sizeof(float) * 3 * 4 * RL_DEFAULT_BATCH_BUFFER_ELEMENTS);
+    RLGL.texcoordData = (float *)RL_MALLOC(sizeof(float) * 2 * 4 * RL_DEFAULT_BATCH_BUFFER_ELEMENTS);
+    RLGL.normalData = (float *)RL_MALLOC(sizeof(float) * 3 * 4 * RL_DEFAULT_BATCH_BUFFER_ELEMENTS);
+    RLGL.colorData = (unsigned char *)RL_MALLOC(sizeof(unsigned char) * 4 * 4 * RL_DEFAULT_BATCH_BUFFER_ELEMENTS);
+    RLGL.indexData = (unsigned int *)RL_MALLOC(sizeof(unsigned int) * 6 * RL_DEFAULT_BATCH_BUFFER_ELEMENTS);
+    RLGL.vertexCounter = 0;
+    
+    // Initialize default batch
+    RLGL.defaultBatch = rlLoadRenderBatch(RL_DEFAULT_BATCH_BUFFERS, RL_DEFAULT_BATCH_BUFFER_ELEMENTS);
+    RLGL.currentBatch = &RLGL.defaultBatch;
+    
+    // Create default white texture (1x1 pixel)
+    unsigned char pixels[4] = { 255, 255, 255, 255 };
+    RLGL.default_texture = (sg_image){ rlLoadTexture(pixels, 1, 1, RL_PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, 1) };
+    RLGL.currentTextureId = RLGL.default_texture.id;
+    
+    // TODO: Create default shader (needs GLSL source for vertex/fragment shaders)
+    // TODO: Create default pipeline (needs shader first)
     
     TRACELOG(RL_LOG_INFO, "RLGL: Sokol backend initialized");
 }
@@ -1017,9 +1031,24 @@ RLAPI void rlglClose(void)
 {
     TRACELOG(RL_LOG_INFO, "RLGL: Closing Sokol backend");
     
-    // TODO: Free all allocated resources
-    // TODO: Destroy Sokol objects
+    // Free vertex data buffers
+    if (RLGL.vertexData) RL_FREE(RLGL.vertexData);
+    if (RLGL.texcoordData) RL_FREE(RLGL.texcoordData);
+    if (RLGL.normalData) RL_FREE(RLGL.normalData);
+    if (RLGL.colorData) RL_FREE(RLGL.colorData);
+    if (RLGL.indexData) RL_FREE(RLGL.indexData);
     
+    // Unload default batch
+    rlUnloadRenderBatch(RLGL.defaultBatch);
+    
+    // Destroy default texture
+    if (RLGL.default_texture.id != 0) {
+        sg_destroy_image(RLGL.default_texture);
+    }
+    
+    // TODO: Destroy default shader and pipeline
+    
+    // Shutdown Sokol
     sg_shutdown();
     
     TRACELOG(RL_LOG_INFO, "RLGL: Sokol backend closed");
@@ -1118,7 +1147,14 @@ RLAPI void rlScalef(float x, float y, float z)
 
 RLAPI void rlMultMatrixf(const float *matf)
 {
-    // TODO: Implement matrix multiplication with provided float array
+    // Convert float array to Matrix and multiply
+    Matrix mat = {
+        matf[0], matf[4], matf[8], matf[12],
+        matf[1], matf[5], matf[9], matf[13],
+        matf[2], matf[6], matf[10], matf[14],
+        matf[3], matf[7], matf[11], matf[15]
+    };
+    *RLGL.currentMatrix = MatrixMultiply(*RLGL.currentMatrix, mat);
 }
 
 RLAPI void rlFrustum(double left, double right, double bottom, double top, double znear, double zfar)
@@ -1133,7 +1169,14 @@ RLAPI void rlOrtho(double left, double right, double bottom, double top, double 
 
 RLAPI void rlViewport(int x, int y, int width, int height)
 {
-    // TODO: Implement viewport setting using Sokol
+    // Store viewport dimensions for later use in passes
+    // Sokol applies viewport through sg_apply_viewport in a pass
+    // For now, just store the dimensions
+    RLGL.framebufferWidth = width;
+    RLGL.framebufferHeight = height;
+    
+    // TODO: Apply viewport in next render pass
+    // sg_apply_viewport(x, y, width, height, true);
 }
 
 RLAPI void rlSetClipPlanes(double nearPlane, double farPlane)
@@ -1185,7 +1228,36 @@ RLAPI void rlVertex2f(float x, float y)
 
 RLAPI void rlVertex3f(float x, float y, float z)
 {
-    // TODO: Accumulate vertex in buffer
+    if (!RLGL.vertexDataMode) return;
+    
+    // Transform vertex by current matrix
+    Vector3 vec = { x, y, z };
+    vec = Vector3Transform(vec, *RLGL.currentMatrix);
+    
+    // Store vertex position
+    int index = RLGL.vertexCounter * 3;
+    RLGL.vertexData[index] = vec.x;
+    RLGL.vertexData[index + 1] = vec.y;
+    RLGL.vertexData[index + 2] = vec.z;
+    
+    // Store texture coordinates
+    int texIndex = RLGL.vertexCounter * 2;
+    RLGL.texcoordData[texIndex] = RLGL.currentTexCoord[0];
+    RLGL.texcoordData[texIndex + 1] = RLGL.currentTexCoord[1];
+    
+    // Store normal
+    RLGL.normalData[index] = RLGL.currentNormal[0];
+    RLGL.normalData[index + 1] = RLGL.currentNormal[1];
+    RLGL.normalData[index + 2] = RLGL.currentNormal[2];
+    
+    // Store color
+    int colorIndex = RLGL.vertexCounter * 4;
+    RLGL.colorData[colorIndex] = RLGL.currentColor[0];
+    RLGL.colorData[colorIndex + 1] = RLGL.currentColor[1];
+    RLGL.colorData[colorIndex + 2] = RLGL.currentColor[2];
+    RLGL.colorData[colorIndex + 3] = RLGL.currentColor[3];
+    
+    RLGL.vertexCounter++;
 }
 
 RLAPI void rlTexCoord2f(float x, float y)
@@ -1288,6 +1360,11 @@ RLAPI void rlCheckErrors(void) {}
 RLAPI void rlSetBlendMode(int mode) {}
 RLAPI void rlSetBlendFactors(int glSrcFactor, int glDstFactor, int glEquation) {}
 RLAPI void rlSetBlendFactorsSeparate(int glSrcRGB, int glDstRGB, int glSrcAlpha, int glDstAlpha, int glEqRGB, int glEqAlpha) {}
+
+// Additional Get functions
+RLAPI unsigned int rlGetTextureIdDefault(void) { return RLGL.default_texture.id; }
+RLAPI unsigned int rlGetShaderIdDefault(void) { return RLGL.shader.id; }
+RLAPI void *rlGetProcAddress(const char *procName) { return NULL; } // Sokol handles this internally
 
 //----------------------------------------------------------------------------------
 // Module Functions Definition - Vertex Buffer Functions
@@ -1556,8 +1633,19 @@ RLAPI void rlUnloadRenderBatch(rlRenderBatch batch)
 
 RLAPI void rlDrawRenderBatch(rlRenderBatch *batch)
 {
-    // TODO: Submit batch to Sokol for rendering
-    // This is a critical function that needs full implementation
+    if (!batch) return;
+    
+    // For now, just call FlushBatch which handles the immediate mode rendering
+    // A full implementation would iterate through batch.draws and submit each draw call
+    // with proper state management, texture binding, etc.
+    FlushBatch();
+    
+    // TODO: Implement proper batch rendering with:
+    // - Iterate through batch->draws
+    // - Apply pipeline state for each draw
+    // - Bind textures
+    // - Submit geometry to Sokol
+    // - Handle state changes between draws
 }
 
 RLAPI void rlDrawRenderBatchActive(void)
@@ -1590,13 +1678,118 @@ static Matrix rlMatrixRotateAxisAngle(float angle, float x, float y, float z)
 
 static void FlushBatch(void)
 {
-    // TODO: Convert accumulated vertex data to Sokol format and submit
-    // This is a critical function that needs full implementation
+    if (RLGL.vertexCounter == 0) return;
+    
+    // Convert quads to triangles if needed
+    if (RLGL.currentDrawMode == RL_QUADS) {
+        ConvertQuadsToTriangles();
+    }
+    
+    // Create or update vertex buffer with accumulated data
+    if (RLGL.vertex_buffer.id == 0) {
+        // Create new buffer
+        sg_buffer_desc desc = {
+            .size = sizeof(float) * 3 * RLGL.vertexCounter,
+            .usage = { .vertex_buffer = true, .stream_update = true },
+            .data = { .ptr = RLGL.vertexData, .size = sizeof(float) * 3 * RLGL.vertexCounter }
+        };
+        RLGL.vertex_buffer = sg_make_buffer(&desc);
+    } else {
+        // Update existing buffer
+        sg_range range = { .ptr = RLGL.vertexData, .size = sizeof(float) * 3 * RLGL.vertexCounter };
+        sg_update_buffer(RLGL.vertex_buffer, &range);
+    }
+    
+    // TODO: Create bindings with texture, vertex buffers
+    // TODO: Apply pipeline state
+    // TODO: Submit draw call to Sokol
+    // sg_apply_bindings(&RLGL.bindings);
+    // sg_draw(0, RLGL.vertexCounter, 1);
+    
+    // Reset vertex counter
+    RLGL.vertexCounter = 0;
 }
 
 static void ConvertQuadsToTriangles(void)
 {
-    // TODO: Convert quad primitives to triangle primitives for Sokol
+    // Convert quad vertices (4 vertices) to triangle vertices (6 vertices)
+    // Quad: v0, v1, v2, v3 -> Triangles: v0, v1, v2, v0, v2, v3
+    
+    int quadCount = RLGL.vertexCounter / 4;
+    int newVertexCount = quadCount * 6;
+    
+    if (newVertexCount > RL_DEFAULT_BATCH_BUFFER_ELEMENTS * 4) return; // Safety check
+    
+    // Temporary buffers for conversion
+    float *tempVertices = (float *)RL_MALLOC(sizeof(float) * 3 * newVertexCount);
+    float *tempTexcoords = (float *)RL_MALLOC(sizeof(float) * 2 * newVertexCount);
+    float *tempNormals = (float *)RL_MALLOC(sizeof(float) * 3 * newVertexCount);
+    unsigned char *tempColors = (unsigned char *)RL_MALLOC(sizeof(unsigned char) * 4 * newVertexCount);
+    
+    for (int i = 0; i < quadCount; i++) {
+        int quadIndex = i * 4;
+        int triIndex = i * 6;
+        
+        // First triangle: 0, 1, 2
+        for (int j = 0; j < 3; j++) {
+            int srcIdx = quadIndex + j;
+            int dstIdx = triIndex + j;
+            
+            tempVertices[dstIdx * 3] = RLGL.vertexData[srcIdx * 3];
+            tempVertices[dstIdx * 3 + 1] = RLGL.vertexData[srcIdx * 3 + 1];
+            tempVertices[dstIdx * 3 + 2] = RLGL.vertexData[srcIdx * 3 + 2];
+            
+            tempTexcoords[dstIdx * 2] = RLGL.texcoordData[srcIdx * 2];
+            tempTexcoords[dstIdx * 2 + 1] = RLGL.texcoordData[srcIdx * 2 + 1];
+            
+            tempNormals[dstIdx * 3] = RLGL.normalData[srcIdx * 3];
+            tempNormals[dstIdx * 3 + 1] = RLGL.normalData[srcIdx * 3 + 1];
+            tempNormals[dstIdx * 3 + 2] = RLGL.normalData[srcIdx * 3 + 2];
+            
+            tempColors[dstIdx * 4] = RLGL.colorData[srcIdx * 4];
+            tempColors[dstIdx * 4 + 1] = RLGL.colorData[srcIdx * 4 + 1];
+            tempColors[dstIdx * 4 + 2] = RLGL.colorData[srcIdx * 4 + 2];
+            tempColors[dstIdx * 4 + 3] = RLGL.colorData[srcIdx * 4 + 3];
+        }
+        
+        // Second triangle: 0, 2, 3
+        int indices[3] = { 0, 2, 3 };
+        for (int j = 0; j < 3; j++) {
+            int srcIdx = quadIndex + indices[j];
+            int dstIdx = triIndex + 3 + j;
+            
+            tempVertices[dstIdx * 3] = RLGL.vertexData[srcIdx * 3];
+            tempVertices[dstIdx * 3 + 1] = RLGL.vertexData[srcIdx * 3 + 1];
+            tempVertices[dstIdx * 3 + 2] = RLGL.vertexData[srcIdx * 3 + 2];
+            
+            tempTexcoords[dstIdx * 2] = RLGL.texcoordData[srcIdx * 2];
+            tempTexcoords[dstIdx * 2 + 1] = RLGL.texcoordData[srcIdx * 2 + 1];
+            
+            tempNormals[dstIdx * 3] = RLGL.normalData[srcIdx * 3];
+            tempNormals[dstIdx * 3 + 1] = RLGL.normalData[srcIdx * 3 + 1];
+            tempNormals[dstIdx * 3 + 2] = RLGL.normalData[srcIdx * 3 + 2];
+            
+            tempColors[dstIdx * 4] = RLGL.colorData[srcIdx * 4];
+            tempColors[dstIdx * 4 + 1] = RLGL.colorData[srcIdx * 4 + 1];
+            tempColors[dstIdx * 4 + 2] = RLGL.colorData[srcIdx * 4 + 2];
+            tempColors[dstIdx * 4 + 3] = RLGL.colorData[srcIdx * 4 + 3];
+        }
+    }
+    
+    // Copy back to original buffers
+    memcpy(RLGL.vertexData, tempVertices, sizeof(float) * 3 * newVertexCount);
+    memcpy(RLGL.texcoordData, tempTexcoords, sizeof(float) * 2 * newVertexCount);
+    memcpy(RLGL.normalData, tempNormals, sizeof(float) * 3 * newVertexCount);
+    memcpy(RLGL.colorData, tempColors, sizeof(unsigned char) * 4 * newVertexCount);
+    
+    // Free temporary buffers
+    RL_FREE(tempVertices);
+    RL_FREE(tempTexcoords);
+    RL_FREE(tempNormals);
+    RL_FREE(tempColors);
+    
+    // Update vertex counter
+    RLGL.vertexCounter = newVertexCount;
 }
 
 #endif  // RLGL_IMPLEMENTATION
