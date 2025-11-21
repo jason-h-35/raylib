@@ -889,10 +889,14 @@ typedef struct {
     sg_pipeline pipeline;
     sg_bindings bindings;
     sg_buffer vertex_buffer;
+    sg_buffer texcoord_buffer;
+    sg_buffer color_buffer;
     sg_buffer index_buffer;
     sg_shader shader;
     sg_image texture;
     sg_image default_texture;
+    sg_view default_texture_view;
+    sg_sampler default_sampler;
     
     // Matrix management
     Matrix *currentMatrix;
@@ -944,6 +948,38 @@ typedef struct {
 } RLGLState;
 
 static RLGLState RLGL = { 0 };
+
+//----------------------------------------------------------------------------------
+// Default Shader Source Code
+//----------------------------------------------------------------------------------
+
+// Default vertex shader (GLSL 330)
+static const char *defaultVShaderCode = 
+    "#version 330\n"
+    "in vec3 vertexPosition;\n"
+    "in vec2 vertexTexCoord;\n"
+    "in vec4 vertexColor;\n"
+    "out vec2 fragTexCoord;\n"
+    "out vec4 fragColor;\n"
+    "uniform mat4 mvp;\n"
+    "void main() {\n"
+    "    fragTexCoord = vertexTexCoord;\n"
+    "    fragColor = vertexColor;\n"
+    "    gl_Position = mvp * vec4(vertexPosition, 1.0);\n"
+    "}\n";
+
+// Default fragment shader (GLSL 330)
+static const char *defaultFShaderCode = 
+    "#version 330\n"
+    "in vec2 fragTexCoord;\n"
+    "in vec4 fragColor;\n"
+    "out vec4 finalColor;\n"
+    "uniform sampler2D texture0;\n"
+    "uniform vec4 colDiffuse;\n"
+    "void main() {\n"
+    "    vec4 texelColor = texture(texture0, fragTexCoord);\n"
+    "    finalColor = texelColor * colDiffuse * fragColor;\n"
+    "}\n";
 
 //----------------------------------------------------------------------------------
 // Module specific Functions Declaration (Internal)
@@ -1021,8 +1057,75 @@ RLAPI void rlglInit(int width, int height)
     RLGL.default_texture = (sg_image){ rlLoadTexture(pixels, 1, 1, RL_PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, 1) };
     RLGL.currentTextureId = RLGL.default_texture.id;
     
-    // TODO: Create default shader (needs GLSL source for vertex/fragment shaders)
-    // TODO: Create default pipeline (needs shader first)
+    // Create default texture view
+    sg_view_desc viewDesc = {
+        .texture = {
+            .image = RLGL.default_texture
+        }
+    };
+    RLGL.default_texture_view = sg_make_view(&viewDesc);
+    
+    // Create default sampler
+    sg_sampler_desc samplerDesc = {
+        .min_filter = SG_FILTER_LINEAR,
+        .mag_filter = SG_FILTER_LINEAR,
+        .wrap_u = SG_WRAP_REPEAT,
+        .wrap_v = SG_WRAP_REPEAT
+    };
+    RLGL.default_sampler = sg_make_sampler(&samplerDesc);
+    
+    // Create default shader
+    sg_shader_desc shaderDesc = {
+        .vertex_func = {
+            .source = defaultVShaderCode,
+        },
+        .fragment_func = {
+            .source = defaultFShaderCode,
+        },
+        .attrs = {
+            [0] = { .glsl_name = "vertexPosition", .hlsl_sem_name = "POSITION" },
+            [1] = { .glsl_name = "vertexTexCoord", .hlsl_sem_name = "TEXCOORD" },
+            [2] = { .glsl_name = "vertexColor", .hlsl_sem_name = "COLOR" }
+        },
+        .uniform_blocks[0] = {
+            .stage = SG_SHADERSTAGE_VERTEX,
+            .size = sizeof(Matrix),
+            .glsl_uniforms[0] = { .type = SG_UNIFORMTYPE_MAT4, .glsl_name = "mvp" }
+        },
+        .uniform_blocks[1] = {
+            .stage = SG_SHADERSTAGE_FRAGMENT,
+            .size = sizeof(float) * 4,
+            .glsl_uniforms[0] = { .type = SG_UNIFORMTYPE_FLOAT4, .glsl_name = "colDiffuse" }
+        }
+    };
+    RLGL.shader = sg_make_shader(&shaderDesc);
+    
+    // Create default pipeline
+    sg_pipeline_desc pipelineDesc = {
+        .shader = RLGL.shader,
+        .layout = {
+            .attrs = {
+                [0] = { .format = SG_VERTEXFORMAT_FLOAT3 },  // position
+                [1] = { .format = SG_VERTEXFORMAT_FLOAT2 },  // texcoord
+                [2] = { .format = SG_VERTEXFORMAT_UBYTE4N }  // color
+            }
+        },
+        .depth = {
+            .compare = SG_COMPAREFUNC_LESS_EQUAL,
+            .write_enabled = true
+        },
+        .colors[0] = {
+            .blend = {
+                .enabled = true,
+                .src_factor_rgb = SG_BLENDFACTOR_SRC_ALPHA,
+                .dst_factor_rgb = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
+                .src_factor_alpha = SG_BLENDFACTOR_ONE,
+                .dst_factor_alpha = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA
+            }
+        },
+        .cull_mode = SG_CULLMODE_BACK
+    };
+    RLGL.pipeline = sg_make_pipeline(&pipelineDesc);
     
     TRACELOG(RL_LOG_INFO, "RLGL: Sokol backend initialized");
 }
@@ -1041,12 +1144,24 @@ RLAPI void rlglClose(void)
     // Unload default batch
     rlUnloadRenderBatch(RLGL.defaultBatch);
     
-    // Destroy default texture
+    // Destroy default texture, view, and sampler
+    if (RLGL.default_sampler.id != 0) {
+        sg_destroy_sampler(RLGL.default_sampler);
+    }
+    if (RLGL.default_texture_view.id != 0) {
+        sg_destroy_view(RLGL.default_texture_view);
+    }
     if (RLGL.default_texture.id != 0) {
         sg_destroy_image(RLGL.default_texture);
     }
     
-    // TODO: Destroy default shader and pipeline
+    // Destroy default shader and pipeline
+    if (RLGL.pipeline.id != 0) {
+        sg_destroy_pipeline(RLGL.pipeline);
+    }
+    if (RLGL.shader.id != 0) {
+        sg_destroy_shader(RLGL.shader);
+    }
     
     // Shutdown Sokol
     sg_shutdown();
@@ -1687,24 +1802,63 @@ static void FlushBatch(void)
     
     // Create or update vertex buffer with accumulated data
     if (RLGL.vertex_buffer.id == 0) {
-        // Create new buffer
         sg_buffer_desc desc = {
-            .size = sizeof(float) * 3 * RLGL.vertexCounter,
-            .usage = { .vertex_buffer = true, .stream_update = true },
-            .data = { .ptr = RLGL.vertexData, .size = sizeof(float) * 3 * RLGL.vertexCounter }
+            .size = sizeof(float) * 3 * RL_DEFAULT_BATCH_BUFFER_ELEMENTS * 4,
+            .usage = { .vertex_buffer = true, .stream_update = true }
         };
         RLGL.vertex_buffer = sg_make_buffer(&desc);
-    } else {
-        // Update existing buffer
-        sg_range range = { .ptr = RLGL.vertexData, .size = sizeof(float) * 3 * RLGL.vertexCounter };
-        sg_update_buffer(RLGL.vertex_buffer, &range);
     }
+    sg_range vrange = { .ptr = RLGL.vertexData, .size = sizeof(float) * 3 * RLGL.vertexCounter };
+    sg_update_buffer(RLGL.vertex_buffer, &vrange);
     
-    // TODO: Create bindings with texture, vertex buffers
-    // TODO: Apply pipeline state
-    // TODO: Submit draw call to Sokol
-    // sg_apply_bindings(&RLGL.bindings);
-    // sg_draw(0, RLGL.vertexCounter, 1);
+    // Create or update texcoord buffer
+    if (RLGL.texcoord_buffer.id == 0) {
+        sg_buffer_desc desc = {
+            .size = sizeof(float) * 2 * RL_DEFAULT_BATCH_BUFFER_ELEMENTS * 4,
+            .usage = { .vertex_buffer = true, .stream_update = true }
+        };
+        RLGL.texcoord_buffer = sg_make_buffer(&desc);
+    }
+    sg_range trange = { .ptr = RLGL.texcoordData, .size = sizeof(float) * 2 * RLGL.vertexCounter };
+    sg_update_buffer(RLGL.texcoord_buffer, &trange);
+    
+    // Create or update color buffer
+    if (RLGL.color_buffer.id == 0) {
+        sg_buffer_desc desc = {
+            .size = sizeof(unsigned char) * 4 * RL_DEFAULT_BATCH_BUFFER_ELEMENTS * 4,
+            .usage = { .vertex_buffer = true, .stream_update = true }
+        };
+        RLGL.color_buffer = sg_make_buffer(&desc);
+    }
+    sg_range crange = { .ptr = RLGL.colorData, .size = sizeof(unsigned char) * 4 * RLGL.vertexCounter };
+    sg_update_buffer(RLGL.color_buffer, &crange);
+    
+    // Setup bindings with texture and vertex buffers
+    RLGL.bindings = (sg_bindings){
+        .vertex_buffers[0] = RLGL.vertex_buffer,
+        .vertex_buffers[1] = RLGL.texcoord_buffer,
+        .vertex_buffers[2] = RLGL.color_buffer,
+        .views[0] = RLGL.default_texture_view,
+        .samplers[0] = RLGL.default_sampler
+    };
+    
+    // Apply pipeline state
+    sg_apply_pipeline(RLGL.pipeline);
+    sg_apply_bindings(&RLGL.bindings);
+    
+    // Calculate MVP matrix
+    Matrix mvp = MatrixMultiply(RLGL.modelview, RLGL.projection);
+    
+    // Apply uniforms
+    sg_range mvp_range = { .ptr = &mvp, .size = sizeof(Matrix) };
+    sg_apply_uniforms(0, &mvp_range);
+    
+    float colDiffuse[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+    sg_range col_range = { .ptr = colDiffuse, .size = sizeof(float) * 4 };
+    sg_apply_uniforms(1, &col_range);
+    
+    // Submit draw call to Sokol
+    sg_draw(0, RLGL.vertexCounter, 1);
     
     // Reset vertex counter
     RLGL.vertexCounter = 0;
